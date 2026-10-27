@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NXS 777 COUNCIL</title>
+<style>
+body { background:#000; color:#0f0; font-family:'Courier New',monospace; text-align:center; margin:0; padding:20px; overflow-x:hidden; }
+canvas#matrix { position:fixed; top:0; left:0; z-index:-1; pointer-events:none; }
+.login-box,.panel { max-width:900px; margin:auto; background:rgba(0,0,0,.88); padding:20px; border:2px solid #0f0; border-radius:10px; }
+.server,.player,.announce { border:1px solid #0f0; margin:10px; padding:10px; border-radius:5px; text-align:left; overflow-wrap:anywhere; }
+.dominated { background:rgba(0,50,0,.5); border-color:lime; }
+.free { background:rgba(50,0,0,.5); border-color:red; }
+.found { color:lime; } .notfound { color:orange; }
+.admin { border-color:gold; background:rgba(50,50,0,.5); }
+.commander { border-color:cyan; } .taskgiver { border-color:magenta; }
+input,select,button { padding:8px; margin:5px; background:#000; color:#0f0; border:1px solid #0f0; cursor:pointer; max-width:100%; }
+button:hover { background:#0f0; color:#000; }
+button.danger { background:red; color:#000; }
+#panel { display:none; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+@media(max-width:900px){.grid{grid-template-columns:1fr;}}
+#announcements { max-height:200px; overflow-y:auto; }
+#saveStatus { font-size:.9rem; color:#9f9; }
+</style>
+</head>
+<body>
+<canvas id="matrix"></canvas>
+
+<div class="login-box" id="loginScreen">
+  <h1>⚡ NXS 777 COUNCIL OF GODS ⚡</h1>
+  <input type="text" id="username" placeholder="Enter God Name" autocomplete="username"><br>
+  <input type="password" id="pass" placeholder="Master Password" autocomplete="current-password"><br>
+  <button onclick="login()">ENTER COUNCIL</button>
+  <p id="msg"></p>
+  <p id="saveStatus">Autosave is ready on this browser.</p>
+</div>
+
+<div class="panel" id="panel">
+  <h1>⚡ NXS 777 WAR ROOM ⚡</h1>
+  <h3>Logged in as: <span id="currentUser"></span> | <span id="currentRank"></span> | <span id="currentXP"></span> XP</h3>
+  <p id="saveStatusPanel">Autosave: ready</p>
+
+  <div style="border:2px solid gold;padding:10px;margin:10px 0;">
+    <h3>📢 COUNCIL ANNOUNCEMENTS [20 MAX]</h3>
+    <input type="text" id="announceText" placeholder="Post announcement">
+    <button onclick="postAnnounce()">POST</button>
+    <div id="announcements"></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <h2>SERVER CONTROL</h2>
+      <div id="adminServer" style="display:none;">
+        <input type="text" id="serverName" placeholder="Server Name">
+        <select id="territory"><option value="found">FOUND</option><option value="notfound">NOT FOUND</option></select>
+        <button onclick="addServer()">ADD SERVER</button>
+        <button class="danger" onclick="resetCouncil()">RESET COUNCIL</button>
+      </div>
+      <div id="serverList"></div>
+    </div>
+    <div>
+      <h2>COUNCIL ROSTER</h2>
+      <div id="teamList"></div>
+      <div id="adminXP" style="display:none;border:1px dashed gold;padding:10px;">
+        <h4>GOD OF CHAOS XP CONTROL</h4>
+        <p>Select player then give XP</p>
+        <button onclick="giveXP(10)">+10 XP</button>
+        <button onclick="giveXP(50)">+50 XP</button>
+        <button onclick="giveXP(100)">+100 XP</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="activityLog" style="margin-top:20px;text-align:left;border-top:1px solid #0f0;padding-top:10px;">
+    <h3>ACTIVITY LOG</h3><div id="log"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// IMPORTANT: browser localStorage autosaves only in this browser/device.
+// This is not a secure login or shared online database.
+const STORAGE_KEY = "nxs777_council_autosave_v1";
+const GODS = ["admin","GOD OF AURA","GOD OF WAR","GOD OF PEACE","GOD OF THE OCEAN","GOD OF WISDOM","GOD OF DARKNESS"];
+const DISPLAY = {
+  "admin":"GOD OF CHAOS",
+  "GOD OF AURA":"GOD OF AURA",
+  "GOD OF WAR":"GOD OF WAR",
+  "GOD OF PEACE":"GOD OF PEACE",
+  "GOD OF THE OCEAN":"GOD OF THE OCEAN",
+  "GOD OF WISDOM":"GOD OF WISDOM",
+  "GOD OF DARKNESS":"GOD OF DARKNESS"
+};
+// Demo-only password. Do not use this for real accounts: it is visible in page source.
+const PASS = "NXS 777";
+
+let currentUser = "", selectedPlayer = "";
+const defaultXP = {"admin":999,"GOD OF AURA":0,"GOD OF WAR":0,"GOD OF PEACE":0,"GOD OF THE OCEAN":0,"GOD OF WISDOM":0,"GOD OF DARKNESS":0};
+let xp = {...defaultXP};
+let announcements = [];
+let servers = [{name:"NEXUS-ALPHA",territory:"found",dominated:true}];
+let log = [];
+
+const audio = new (window.AudioContext || window.webkitAudioContext)();
+function beep(freq,time) {
+  try {
+    if (audio.state === "suspended") audio.resume();
+    const osc=audio.createOscillator(), gain=audio.createGain();
+    osc.connect(gain); gain.connect(audio.destination);
+    osc.frequency.value=freq; gain.gain.value=.1;
+    osc.start(); osc.stop(audio.currentTime+time);
+  } catch(e) { /* Sound is optional if the browser blocks audio. */ }
+}
+
+function setSaveStatus(message) {
+  const a=document.getElementById("saveStatus");
+  const b=document.getElementById("saveStatusPanel");
+  if(a) a.textContent=message;
+  if(b) b.textContent=message;
+}
+function saveState() {
+  try {
+    const state={xp,announcements,servers,log};
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
+    setSaveStatus("Autosaved locally ✓ " + new Date().toLocaleTimeString());
+  } catch(err) {
+    setSaveStatus("Autosave unavailable — browser storage may be full or disabled.");
+  }
+}
+function loadSavedState() {
+  try {
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw) return;
+    const state=JSON.parse(raw);
+    if(state && typeof state==="object") {
+      if(state.xp && typeof state.xp==="object") xp={...defaultXP,...state.xp};
+      if(Array.isArray(state.announcements)) announcements=state.announcements.slice(-20);
+      if(Array.isArray(state.servers)) servers=state.servers;
+      if(Array.isArray(state.log)) log=state.log.slice(-15);
+    }
+    setSaveStatus("Saved council data restored ✓");
+  } catch(err) {
+    setSaveStatus("Could not read saved data; starting with default data.");
+  }
+}
+// Save again when the page is being closed or sent to the background.
+window.addEventListener("beforeunload",saveState);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")saveState();});
+loadSavedState();
+
+// MATRIX RAIN
+const canvas=document.getElementById("matrix"), ctx=canvas.getContext("2d");
+let drops=[];
+const chars="01NXS777", fontSize=14;
+function resizeMatrix(){
+  canvas.width=window.innerWidth; canvas.height=window.innerHeight;
+  drops=Array(Math.floor(canvas.width/fontSize)).fill(1);
+}
+window.addEventListener("resize",resizeMatrix); resizeMatrix();
+function drawMatrix(){
+  ctx.fillStyle="rgba(0,0,0,0.05)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle="#0f0"; ctx.font=fontSize+"px monospace";
+  for(let i=0;i<drops.length;i++){
+    ctx.fillText(chars[Math.floor(Math.random()*chars.length)],i*fontSize,drops[i]*fontSize);
+    if(drops[i]*fontSize>canvas.height && Math.random()>.975) drops[i]=0;
+    drops[i]++;
+  }
+}
+setInterval(drawMatrix,35);
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[ch]));
+}
+function login(){
+  beep(440,.1);
+  const u=document.getElementById("username").value.trim();
+  const p=document.getElementById("pass").value;
+  if(p!==PASS || !GODS.includes(u)){
+    document.getElementById("msg").textContent="ACCESS DENIED";
+    document.getElementById("msg").style.color="red"; beep(220,.3); return;
+  }
+  currentUser=u;
+  document.getElementById("loginScreen").style.display="none";
+  document.getElementById("panel").style.display="block";
+  document.getElementById("currentUser").textContent=DISPLAY[u];
+  document.getElementById("adminServer").style.display=u==="admin"?"block":"none";
+  document.getElementById("adminXP").style.display=u==="admin"?"block":"none";
+  updateUI(); beep(880,.2);
+  addLog(`${DISPLAY[u]} entered the council`);
+}
+function getRank(x){if(x>=500)return"COMMANDER";if(x>=400)return"TASK GIVER";return"RECRUIT";}
+function updateUI(){
+  document.getElementById("currentRank").textContent=getRank(xp[currentUser]);
+  document.getElementById("currentXP").textContent=xp[currentUser];
+  loadTeam(); loadServers(); loadAnnounce(); loadLog(); saveState();
+}
+function loadTeam(){
+  let html="";
+  GODS.forEach(g=>{
+    const rank=getRank(xp[g]);
+    let cls=rank==="COMMANDER"?"commander":rank==="TASK GIVER"?"taskgiver":"";
+    if(g==="admin") cls="admin";
+    const kickBtn=(currentUser==="admin"||getRank(xp[currentUser])==="COMMANDER")&&g!==currentUser
+      ?`<button class="danger" onclick="kick('${g}')">KICK</button>`:"";
+    const xpBtn=currentUser==="admin"?`<button onclick="selectPlayer('${g}')">SELECT</button>`:"";
+    html+=`<div class="player ${cls}"><b>${escapeHTML(DISPLAY[g])}</b> | ${rank} | ${xp[g]} XP ${kickBtn} ${xpBtn}</div>`;
+  });
+  document.getElementById("teamList").innerHTML=html;
+}
+function selectPlayer(p){selectedPlayer=p;beep(600,.05);setSaveStatus("Selected "+DISPLAY[p]);}
+function giveXP(amount){
+  beep(700,.1); if(!selectedPlayer)return;
+  xp[selectedPlayer]+=amount;
+  const oldRank=getRank(xp[selectedPlayer]-amount), newRank=getRank(xp[selectedPlayer]);
+  if(oldRank!==newRank){beep(1000,.3);alert(`${DISPLAY[selectedPlayer]} PROMOTED TO ${newRank}!`);}
+  addLog(`GOD OF CHAOS gave ${amount} XP to ${DISPLAY[selectedPlayer]}`); updateUI();
+}
+function kick(p){
+  beep(150,.3); alert(`${DISPLAY[p]} KICKED FOR THIS SESSION`);
+  addLog(`${DISPLAY[currentUser]} kicked ${DISPLAY[p]}`);
+}
+function addServer(){
+  beep(500,.1);
+  const n=document.getElementById("serverName").value.trim(); if(!n)return;
+  servers.push({name:n.toUpperCase(),territory:document.getElementById("territory").value,dominated:false});
+  document.getElementById("serverName").value="";
+  addLog(`${DISPLAY[currentUser]} added server ${n}`); loadServers(); saveState();
+}
+function loadServers(){
+  let html="";
+  servers.forEach((s,i)=>{
+    const t=s.territory==="found"?'<span class="found">FOUND</span>':'<span class="notfound">NOT FOUND</span>';
+    const btn=!s.dominated?`<button onclick="dominate(${i})">DOMINATE</button>`:"";
+    html+=`<div class="server ${s.dominated?'dominated':'free'}"><b>${escapeHTML(s.name)}</b><br>Territory: ${t}<br>Status: <b>${s.dominated?'DOMINATED':'FREE'}</b>${btn}</div>`;
+  });
+  document.getElementById("serverList").innerHTML=html;
+}
+function dominate(i){
+  if(!servers[i])return;
+  beep(880,.2); servers[i].dominated=true;
+  addLog(`${DISPLAY[currentUser]} DOMINATED ${servers[i].name}`); loadServers(); saveState();
+}
+function postAnnounce(){
+  beep(600,.1);
+  const t=document.getElementById("announceText").value.trim(); if(!t)return;
+  announcements.push(`[${new Date().toLocaleTimeString()}] ${DISPLAY[currentUser]}: ${t}`);
+  if(announcements.length>20)announcements.shift();
+  document.getElementById("announceText").value="";
+  addLog(`${DISPLAY[currentUser]} posted announcement`); loadAnnounce(); saveState();
+}
+function loadAnnounce(){
+  document.getElementById("announcements").innerHTML=announcements.map(a=>`<div class="announce">${escapeHTML(a)}</div>`).join("");
+}
+function addLog(msg){
+  log.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+  if(log.length>15)log.shift();
+  loadLog(); saveState();
+}
+function loadLog(){
+  document.getElementById("log").innerHTML=log.map(l=>`<div>${escapeHTML(l)}</div>`).join("");
+}
+function resetCouncil(){
+  beep(300,.5);
+  if(confirm("RESET ALL SERVER DOMINATION STATUS?")){
+    servers.forEach(s=>s.dominated=false);
+    addLog("GOD OF CHAOS RESET THE COUNCIL"); loadServers(); saveState();
+  }
+}
+</script>
+</body>
+</html>
